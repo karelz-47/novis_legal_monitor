@@ -19,7 +19,7 @@ import streamlit as st
 import datetime as dt
 import os
 
-from . import monitor
+import monitor
 
 st.set_page_config(page_title="NOVIS Monitor", layout="wide")
 
