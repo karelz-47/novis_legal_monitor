@@ -37,6 +37,7 @@ successful runs is saved to `last_run.txt` for incremental updates.
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import os
 import re
 import requests
@@ -148,8 +149,8 @@ def fetch_changes(dataset_path: str, since: str) -> List[Dict[str, Any]]:
     return records
 
 
-def record_contains_novis(record: Dict[str, Any]) -> bool:
-    """Check whether a record is associated with a company named NOVIS.
+def record_contains_query(record: Dict[str, Any], query: str = "NOVIS") -> bool:
+    """Check whether a record contains a query string anywhere.
 
     The Slovensko.Digital issue records differ in structure across
     datasets.  We inspect several potential fields:
@@ -170,30 +171,51 @@ def record_contains_novis(record: Dict[str, Any]) -> bool:
         True if any relevant name contains "NOVIS" (case‑insensitive),
         otherwise False.
     """
-    # Check debtor
-    debtor = record.get("debtor")
-    if debtor and isinstance(debtor, dict):
-        name = debtor.get("corporate_body_name")
-        if name and NOVIS_PATTERN.search(str(name)):
-            return True
-    # Check top‑level corporate_body_name
-    name = record.get("corporate_body_name")
-    if name and NOVIS_PATTERN.search(str(name)):
-        return True
-    # Check proposers array
-    proposers = record.get("proposers")
-    if proposers and isinstance(proposers, list):
-        for proposer in proposers:
-            if isinstance(proposer, dict):
-                pname = proposer.get("corporate_body_name")
-                if pname and NOVIS_PATTERN.search(str(pname)):
-                    return True
-    return False
+    if not query:
+        return False
+    payload = json.dumps(record, ensure_ascii=False, default=str)
+    return query.lower() in payload.lower()
 
 
-def filter_records_for_novis(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Return only those records that relate to a company with "NOVIS" in its name."""
-    return [rec for rec in records if record_contains_novis(rec)]
+def filter_records_by_query(records: List[Dict[str, Any]], query: str = "NOVIS") -> List[Dict[str, Any]]:
+    """Return only those records that contain the query text anywhere."""
+    return [rec for rec in records if record_contains_query(rec, query=query)]
+
+
+def _parse_record_datetime(record: Dict[str, Any]) -> Optional[_dt.datetime]:
+    for key in ("updated_at", "released_date", "created_at"):
+        value = record.get(key)
+        if not value:
+            continue
+        try:
+            parsed = _dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=_dt.timezone.utc)
+            return parsed
+        except ValueError:
+            continue
+    return None
+
+
+def filter_records_by_date_range(
+    records: List[Dict[str, Any]],
+    from_dt: Optional[_dt.datetime],
+    to_dt: Optional[_dt.datetime],
+) -> List[Dict[str, Any]]:
+    """Filter records to a datetime window using known date fields."""
+    if from_dt is None and to_dt is None:
+        return records
+    result: List[Dict[str, Any]] = []
+    for rec in records:
+        rec_dt = _parse_record_datetime(rec)
+        if rec_dt is None:
+            continue
+        if from_dt and rec_dt < from_dt:
+            continue
+        if to_dt and rec_dt > to_dt:
+            continue
+        result.append(rec)
+    return result
 
 
 def format_records_html(records: List[Dict[str, Any]]) -> str:
@@ -324,7 +346,11 @@ def save_last_run_timestamp(path: str, timestamp: str) -> None:
         f.write(timestamp)
 
 
-def perform_update(since: str) -> Dict[str, Any]:
+def perform_update(
+    since: str,
+    query: str = "NOVIS",
+    to_timestamp: Optional[str] = None,
+) -> Dict[str, Any]:
     """Perform a full update cycle: fetch, filter and send notifications.
 
     Parameters
@@ -338,17 +364,22 @@ def perform_update(since: str) -> Dict[str, Any]:
         Summary containing the number of records fetched, filtered and
         whether an email was sent.
     """
+    from_dt = _dt.datetime.fromisoformat(since.replace("Z", "+00:00"))
+    to_dt = _dt.datetime.fromisoformat(to_timestamp.replace("Z", "+00:00")) if to_timestamp else None
     total_fetched = 0
     matched_records: List[Dict[str, Any]] = []
     for friendly_name, path in DATASETS:
         records = fetch_changes(path, since)
         total_fetched += len(records)
-        matched = filter_records_for_novis(records)
+        records = filter_records_by_date_range(records, from_dt=from_dt, to_dt=to_dt)
+        matched = filter_records_by_query(records, query=query)
         matched_records.extend(matched)
     email_result = send_email(matched_records)
     summary = {
         "timestamp": _dt.datetime.utcnow().isoformat() + "Z",
         "since": since,
+        "to": to_timestamp,
+        "query": query,
         "fetched": total_fetched,
         "matches": len(matched_records),
         "email_sent": email_result is not None,

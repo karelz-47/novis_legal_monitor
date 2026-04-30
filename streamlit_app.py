@@ -25,6 +25,12 @@ st.set_page_config(page_title="NOVIS Monitor", layout="wide")
 
 st.title("NOVIS Liquidation & Bankruptcy Monitor")
 
+search_query = st.text_input("Search text", value="NOVIS", help="Case-insensitive text search across all record fields.")
+
+default_from = (dt.datetime.utcnow() - dt.timedelta(days=30)).date()
+date_from = st.date_input("From date (UTC)", value=default_from)
+date_to = st.date_input("To date (UTC)", value=dt.datetime.utcnow().date())
+
 # Path to the timestamp file
 current_dir = os.path.dirname(os.path.abspath(__file__))
 ts_path = os.path.join(current_dir, "last_run.txt")
@@ -37,14 +43,12 @@ else:
     st.write("No previous runs recorded.")
 
 if st.button("Run update"):
-    if not last_ts:
-        # Default to 30 days ago
-        since_dt = dt.datetime.utcnow() - dt.timedelta(days=30)
-        since = since_dt.isoformat() + "Z"
-    else:
-        since = last_ts
+    since_dt = dt.datetime.combine(date_from, dt.time.min)
+    to_dt = dt.datetime.combine(date_to, dt.time.max)
+    since = since_dt.isoformat() + "Z"
+    to_timestamp = to_dt.isoformat() + "Z"
     with st.spinner("Fetching updates and sending notifications..."):
-        summary = monitor.perform_update(since)
+        summary = monitor.perform_update(since, query=search_query, to_timestamp=to_timestamp)
         # Save the timestamp
         monitor.save_last_run_timestamp(ts_path, summary["timestamp"])
     st.success("Update complete.")
