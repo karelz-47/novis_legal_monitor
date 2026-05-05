@@ -172,7 +172,7 @@ def record_contains_query(record: Dict[str, Any], query: str = "NOVIS") -> bool:
         otherwise False.
     """
     if not query:
-        return False
+        return True
     payload = json.dumps(record, ensure_ascii=False, default=str)
     return query.lower() in payload.lower()
 
