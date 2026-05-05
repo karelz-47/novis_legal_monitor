@@ -1,10 +1,10 @@
-# NOVIS Monitor
+# Legal Monitor
 
 This project provides a small utility that periodically queries public
 APIs from [Ekosystém Slovensko.Digital](https://ekosystem.slovensko.digital/)
 for new submissions relating to bankruptcies, restructurings and
 liquidations.  It filters the results for companies whose names
-contain the substring **“NOVIS”** and sends an email notification
+contain a user-provided search query and sends an email notification
 whenever such records appear.
 
 ## Data sources
@@ -34,10 +34,12 @@ This module contains the core logic:
 * **`fetch_changes`** — calls the `/sync` endpoint for a dataset,
   follows pagination via the `Link` header and returns a list of
   records.
+* **`fetch_items_from_last_n_days`** — helper that fetches all items
+  from a given dataset for the last *n* days.
 * **`record_contains_novis`** — inspects a record and checks
   whether the debtor’s or corporate body name contains `NOVIS`.
 * **`filter_records_for_novis`** — filters a list of records to those
-  relevant to NOVIS.
+  relevant to the query.
 * **`send_email`** — uses the [Resend Python SDK](https://resend.com/docs/send-with-python) to send a formatted HTML email
   summarising the matching records.  API credentials are read from
   environment variables.
@@ -62,7 +64,7 @@ To launch the app:
 
 ```bash
 pip install -r requirements.txt
-streamlit run novis_monitor/streamlit_app.py
+streamlit run streamlit_app.py
 ```
 
 ### `requirements.txt`
@@ -82,7 +84,7 @@ must set the following environment variables:
   to `kzvolsky@novis.eu` if unset.
 
 On each update the monitor saves the current UTC timestamp to
-`novis_monitor/last_run.txt`.  Subsequent runs use this timestamp to
+`last_run.txt`.  Subsequent runs use this timestamp to
 request only new or modified records via the `since` parameter.
 
 ## Scheduling
@@ -95,7 +97,7 @@ add a cron job like:
 
 ```cron
 0 * * * * /usr/bin/env bash -c \
-  'cd /path/to/novis_monitor && \n+   RESEND_API_KEY=your_key RESEND_FROM_EMAIL=your_from \n+   RESEND_TO_EMAIL=your_to python monitor.py >> monitor.log 2>&1'
+  'cd /path/to/legal_monitor && \n+   RESEND_API_KEY=your_key RESEND_FROM_EMAIL=your_from \n+   RESEND_TO_EMAIL=your_to python monitor.py >> monitor.log 2>&1'
 ```
 
 ## Limitations

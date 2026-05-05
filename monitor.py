@@ -127,7 +127,7 @@ def fetch_changes(dataset_path: str, since: str) -> List[Dict[str, Any]]:
     session = requests.Session()
     headers = {
         "Accept": "application/json",
-        "User-Agent": "NOVIS monitor (https://github.com/novis_monitor)"
+        "User-Agent": "Legal monitor (https://github.com/legal_monitor)"
     }
     while url:
         resp = session.get(url, headers=headers, timeout=30)
@@ -344,6 +344,35 @@ def save_last_run_timestamp(path: str, timestamp: str) -> None:
     """Persist the ISO timestamp of the last successful run to a file."""
     with open(path, "w", encoding="utf-8") as f:
         f.write(timestamp)
+
+
+def fetch_items_from_last_n_days(dataset_path: str, days: int, now: Optional[_dt.datetime] = None) -> List[Dict[str, Any]]:
+    """Fetch all items from a dataset for the last ``days`` days.
+
+    Parameters
+    ----------
+    dataset_path: str
+        Relative path to the dataset, e.g. ``ov/likvidator_issues``.
+    days: int
+        Number of trailing days to include. Must be >= 0.
+    now: Optional[datetime]
+        Override current time (UTC) for testing.
+
+    Returns
+    -------
+    List[Dict[str, Any]]
+        Retrieved records from the sync API for the requested period.
+    """
+    if days < 0:
+        raise ValueError("days must be non-negative")
+
+    current_time = now or _dt.datetime.now(_dt.timezone.utc)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=_dt.timezone.utc)
+
+    since_dt = current_time - _dt.timedelta(days=days)
+    since = since_dt.isoformat().replace("+00:00", "Z")
+    return fetch_changes(dataset_path, since)
 
 
 def perform_update(

@@ -15,9 +15,9 @@ from reportlab.pdfgen import canvas
 
 import monitor
 
-st.set_page_config(page_title="NOVIS Monitor", layout="wide")
+st.set_page_config(page_title="Legal Monitor", layout="wide")
 
-st.title("NOVIS Liquidation & Bankruptcy Monitor")
+st.title("Liquidation & Bankruptcy Monitor")
 
 
 def _flatten_record(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -46,13 +46,13 @@ def _records_to_dataframe(records: List[Dict[str, Any]]) -> pd.DataFrame:
 def _export_excel(df: pd.DataFrame) -> bytes:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="NOVIS Results")
+        df.to_excel(writer, index=False, sheet_name="Results")
     return output.getvalue()
 
 
 def _export_word(df: pd.DataFrame) -> bytes:
     doc = Document()
-    doc.add_heading("NOVIS Monitor Results", level=1)
+    doc.add_heading("Legal Monitor Results", level=1)
     doc.add_paragraph(f"Generated: {dt.datetime.utcnow().isoformat()}Z")
 
     if df.empty:
@@ -79,7 +79,7 @@ def _export_pdf(df: pd.DataFrame) -> bytes:
     width, height = A4
     y = height - 40
     c.setFont("Helvetica-Bold", 12)
-    c.drawString(40, y, "NOVIS Monitor Results")
+    c.drawString(40, y, "Legal Monitor Results")
     y -= 20
     c.setFont("Helvetica", 9)
     c.drawString(40, y, f"Generated: {dt.datetime.utcnow().isoformat()}Z")
@@ -113,7 +113,7 @@ def _export_pdf(df: pd.DataFrame) -> bytes:
     return output.getvalue()
 
 
-search_query = st.text_input("Search text", value="NOVIS", help="Case-insensitive text search across all record fields.")
+search_query = st.text_input("Search text", value="", help="Case-insensitive text search across all record fields.")
 default_from = (dt.datetime.utcnow() - dt.timedelta(days=30)).date()
 date_from = st.date_input("From date (UTC)", value=default_from)
 date_to = st.date_input("To date (UTC)", value=dt.datetime.utcnow().date())
@@ -155,18 +155,18 @@ if st.button("Run update"):
     st.download_button(
         "Download XLSX",
         data=_export_excel(df),
-        file_name="novis_results.xlsx",
+        file_name="results.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     st.download_button(
         "Download Word",
         data=_export_word(df),
-        file_name="novis_results.docx",
+        file_name="results.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
     st.download_button(
         "Download PDF",
         data=_export_pdf(df),
-        file_name="novis_results.pdf",
+        file_name="results.pdf",
         mime="application/pdf",
     )
