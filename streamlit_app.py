@@ -1,4 +1,4 @@
-"""Streamlit front‑end for the NOVIS monitor."""
+"""Streamlit front‑end for the legal monitor."""
 
 from __future__ import annotations
 
@@ -15,9 +15,9 @@ from reportlab.pdfgen import canvas
 
 import monitor
 
-st.set_page_config(page_title="NOVIS Monitor", layout="wide")
+st.set_page_config(page_title="Legal Monitor", layout="wide")
 
-st.title("NOVIS Liquidation & Bankruptcy Monitor")
+st.title("Liquidation & Bankruptcy Monitor")
 
 
 def _flatten_record(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -46,13 +46,13 @@ def _records_to_dataframe(records: List[Dict[str, Any]]) -> pd.DataFrame:
 def _export_excel(df: pd.DataFrame) -> bytes:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="NOVIS Results")
+        df.to_excel(writer, index=False, sheet_name="Results")
     return output.getvalue()
 
 
 def _export_word(df: pd.DataFrame) -> bytes:
     doc = Document()
-    doc.add_heading("NOVIS Monitor Results", level=1)
+    doc.add_heading("Legal Monitor Results", level=1)
     doc.add_paragraph(f"Generated: {dt.datetime.utcnow().isoformat()}Z")
 
     if df.empty:
@@ -79,7 +79,7 @@ def _export_pdf(df: pd.DataFrame) -> bytes:
     width, height = A4
     y = height - 40
     c.setFont("Helvetica-Bold", 12)
-    c.drawString(40, y, "NOVIS Monitor Results")
+    c.drawString(40, y, "Legal Monitor Results")
     y -= 20
     c.setFont("Helvetica", 9)
     c.drawString(40, y, f"Generated: {dt.datetime.utcnow().isoformat()}Z")
@@ -113,10 +113,18 @@ def _export_pdf(df: pd.DataFrame) -> bytes:
     return output.getvalue()
 
 
-search_query = st.text_input("Search text", value="NOVIS", help="Case-insensitive text search across all record fields.")
-default_from = (dt.datetime.utcnow() - dt.timedelta(days=30)).date()
-date_from = st.date_input("From date (UTC)", value=default_from)
-date_to = st.date_input("To date (UTC)", value=dt.datetime.utcnow().date())
+search_query = st.text_input("Search text", value="", help="Case-insensitive text search across all record fields.")
+window_mode = st.radio("Time window", options=["Last N days", "Custom date range"], horizontal=True)
+
+if window_mode == "Last N days":
+    trailing_days = st.number_input("Days back", min_value=0, value=30, step=1)
+    date_from = None
+    date_to = None
+else:
+    trailing_days = None
+    default_from = (dt.datetime.utcnow() - dt.timedelta(days=30)).date()
+    date_from = st.date_input("From date (UTC)", value=default_from)
+    date_to = st.date_input("To date (UTC)", value=dt.datetime.utcnow().date())
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 ts_path = os.path.join(current_dir, "last_run.txt")
@@ -129,13 +137,16 @@ else:
     st.write("No previous runs recorded.")
 
 if st.button("Run update"):
-    since_dt = dt.datetime.combine(date_from, dt.time.min)
-    to_dt = dt.datetime.combine(date_to, dt.time.max)
-    since = since_dt.isoformat() + "Z"
-    to_timestamp = to_dt.isoformat() + "Z"
-
     with st.spinner("Fetching updates and sending notifications..."):
-        summary = monitor.perform_update(since, query=search_query, to_timestamp=to_timestamp)
+        if window_mode == "Last N days":
+            summary = monitor.perform_update_last_n_days(int(trailing_days), query=search_query)
+        else:
+            since_dt = dt.datetime.combine(date_from, dt.time.min)
+            to_dt = dt.datetime.combine(date_to, dt.time.max)
+            since = since_dt.isoformat() + "Z"
+            to_timestamp = to_dt.isoformat() + "Z"
+            summary = monitor.perform_update(since, query=search_query, to_timestamp=to_timestamp)
+
         monitor.save_last_run_timestamp(ts_path, summary["timestamp"])
 
     st.success("Update complete.")
@@ -155,18 +166,18 @@ if st.button("Run update"):
     st.download_button(
         "Download XLSX",
         data=_export_excel(df),
-        file_name="novis_results.xlsx",
+        file_name="results.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     st.download_button(
         "Download Word",
         data=_export_word(df),
-        file_name="novis_results.docx",
+        file_name="results.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
     st.download_button(
         "Download PDF",
         data=_export_pdf(df),
-        file_name="novis_results.pdf",
+        file_name="results.pdf",
         mime="application/pdf",
     )
