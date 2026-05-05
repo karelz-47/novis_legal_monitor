@@ -1,4 +1,4 @@
-"""Streamlit front‑end for the NOVIS monitor."""
+"""Streamlit front‑end for the legal monitor."""
 
 from __future__ import annotations
 
@@ -114,9 +114,17 @@ def _export_pdf(df: pd.DataFrame) -> bytes:
 
 
 search_query = st.text_input("Search text", value="", help="Case-insensitive text search across all record fields.")
-default_from = (dt.datetime.utcnow() - dt.timedelta(days=30)).date()
-date_from = st.date_input("From date (UTC)", value=default_from)
-date_to = st.date_input("To date (UTC)", value=dt.datetime.utcnow().date())
+window_mode = st.radio("Time window", options=["Last N days", "Custom date range"], horizontal=True)
+
+if window_mode == "Last N days":
+    trailing_days = st.number_input("Days back", min_value=0, value=30, step=1)
+    date_from = None
+    date_to = None
+else:
+    trailing_days = None
+    default_from = (dt.datetime.utcnow() - dt.timedelta(days=30)).date()
+    date_from = st.date_input("From date (UTC)", value=default_from)
+    date_to = st.date_input("To date (UTC)", value=dt.datetime.utcnow().date())
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 ts_path = os.path.join(current_dir, "last_run.txt")
@@ -129,13 +137,16 @@ else:
     st.write("No previous runs recorded.")
 
 if st.button("Run update"):
-    since_dt = dt.datetime.combine(date_from, dt.time.min)
-    to_dt = dt.datetime.combine(date_to, dt.time.max)
-    since = since_dt.isoformat() + "Z"
-    to_timestamp = to_dt.isoformat() + "Z"
-
     with st.spinner("Fetching updates and sending notifications..."):
-        summary = monitor.perform_update(since, query=search_query, to_timestamp=to_timestamp)
+        if window_mode == "Last N days":
+            summary = monitor.perform_update_last_n_days(int(trailing_days), query=search_query)
+        else:
+            since_dt = dt.datetime.combine(date_from, dt.time.min)
+            to_dt = dt.datetime.combine(date_to, dt.time.max)
+            since = since_dt.isoformat() + "Z"
+            to_timestamp = to_dt.isoformat() + "Z"
+            summary = monitor.perform_update(since, query=search_query, to_timestamp=to_timestamp)
+
         monitor.save_last_run_timestamp(ts_path, summary["timestamp"])
 
     st.success("Update complete.")

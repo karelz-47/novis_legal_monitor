@@ -375,6 +375,44 @@ def fetch_items_from_last_n_days(dataset_path: str, days: int, now: Optional[_dt
     return fetch_changes(dataset_path, since)
 
 
+def perform_update_last_n_days(
+    days: int,
+    query: str = "NOVIS",
+    now: Optional[_dt.datetime] = None,
+) -> Dict[str, Any]:
+    """Perform update using a trailing *n*-day window across all datasets."""
+    if days < 0:
+        raise ValueError("days must be non-negative")
+
+    reference_now = now or _dt.datetime.now(_dt.timezone.utc)
+    if reference_now.tzinfo is None:
+        reference_now = reference_now.replace(tzinfo=_dt.timezone.utc)
+
+    since_dt = reference_now - _dt.timedelta(days=days)
+    since = since_dt.isoformat().replace("+00:00", "Z")
+    to_timestamp = reference_now.isoformat().replace("+00:00", "Z")
+
+    total_fetched = 0
+    matched_records: List[Dict[str, Any]] = []
+    for _friendly_name, path in DATASETS:
+        records = fetch_items_from_last_n_days(path, days, now=reference_now)
+        total_fetched += len(records)
+        matched_records.extend(filter_records_by_query(records, query=query))
+
+    email_result = send_email(matched_records)
+    return {
+        "timestamp": _dt.datetime.utcnow().isoformat() + "Z",
+        "since": since,
+        "to": to_timestamp,
+        "query": query,
+        "fetched": total_fetched,
+        "matches": len(matched_records),
+        "email_sent": email_result is not None,
+        "records": matched_records,
+        "window_days": days,
+    }
+
+
 def perform_update(
     since: str,
     query: str = "NOVIS",
