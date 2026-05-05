@@ -383,6 +383,7 @@ def perform_update(
         "fetched": total_fetched,
         "matches": len(matched_records),
         "email_sent": email_result is not None,
+        "records": matched_records,
     }
     return summary
 
