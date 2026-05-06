@@ -37,7 +37,6 @@ successful runs is saved to `last_run.txt` for incremental updates.
 from __future__ import annotations
 
 import datetime as _dt
-import json
 import os
 import re
 import requests
@@ -149,8 +148,33 @@ def fetch_changes(dataset_path: str, since: str) -> List[Dict[str, Any]]:
     return records
 
 
-def record_contains_query(record: Dict[str, Any], query: str = "NOVIS") -> bool:
-    """Check whether a record contains a query string anywhere.
+def _extract_targeted_text(record: Dict[str, Any]) -> str:
+    """Extract searchable text from `proposers` and `corporate_body_name` fields."""
+    pieces: List[str] = []
+    top_level_name = record.get("corporate_body_name")
+    if top_level_name:
+        pieces.append(str(top_level_name))
+
+    debtor = record.get("debtor")
+    if isinstance(debtor, dict):
+        debtor_name = debtor.get("corporate_body_name")
+        if debtor_name:
+            pieces.append(str(debtor_name))
+
+    proposers = record.get("proposers")
+    if isinstance(proposers, list):
+        for proposer in proposers:
+            if isinstance(proposer, dict):
+                proposer_name = proposer.get("corporate_body_name")
+                if proposer_name:
+                    pieces.append(str(proposer_name))
+            elif proposer:
+                pieces.append(str(proposer))
+    return " ".join(pieces)
+
+
+def record_contains_query(record: Dict[str, Any], query: str = "NOVIS", search_mode: str = "full_text") -> bool:
+    """Check whether a record contains a query string in selected search scope.
 
     The Slovensko.Digital issue records differ in structure across
     datasets.  We inspect several potential fields:
@@ -173,13 +197,22 @@ def record_contains_query(record: Dict[str, Any], query: str = "NOVIS") -> bool:
     """
     if not query:
         return True
-    payload = json.dumps(record, ensure_ascii=False, default=str)
-    return query.lower() in payload.lower()
+    lowered_query = query.lower()
+    full_payload = str(record).lower()
+    targeted_payload = _extract_targeted_text(record).lower()
+
+    if search_mode == "targeted":
+        return lowered_query in targeted_payload
+    if search_mode == "combined":
+        return lowered_query in full_payload or lowered_query in targeted_payload
+    return lowered_query in full_payload
 
 
-def filter_records_by_query(records: List[Dict[str, Any]], query: str = "NOVIS") -> List[Dict[str, Any]]:
+def filter_records_by_query(
+    records: List[Dict[str, Any]], query: str = "NOVIS", search_mode: str = "full_text"
+) -> List[Dict[str, Any]]:
     """Return only those records that contain the query text anywhere."""
-    return [rec for rec in records if record_contains_query(rec, query=query)]
+    return [rec for rec in records if record_contains_query(rec, query=query, search_mode=search_mode)]
 
 
 def _parse_record_datetime(record: Dict[str, Any]) -> Optional[_dt.datetime]:
@@ -271,7 +304,7 @@ def format_records_html(records: List[Dict[str, Any]]) -> str:
     return "\n".join(html_parts)
 
 
-def send_email(records: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def send_email(records: List[Dict[str, Any]], recipients: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
     """Send an email notification for the given records via Resend.
 
     If the `resend` SDK is not installed or the RESEND_API_KEY
@@ -296,16 +329,19 @@ def send_email(records: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         return None
     api_key = os.environ.get("RESEND_API_KEY")
     from_email = os.environ.get("RESEND_FROM_EMAIL")
-    to_email = os.environ.get("RESEND_TO_EMAIL", "kzvolsky@novis.eu")
+    to_emails = recipients or []
     if not api_key or not from_email:
         logger.error("Resend API key or from email not configured.")
+        return None
+    if not to_emails:
+        logger.info("No email recipients provided; skipping send.")
         return None
     resend.api_key = api_key
     subject = "NOVIS – new bankruptcy/liquidation notice"
     html_body = format_records_html(records)
     params: Dict[str, Any] = {
         "from": from_email,
-        "to": [to_email],
+        "to": to_emails,
         "subject": subject,
         "html": html_body,
     }
@@ -378,6 +414,9 @@ def fetch_items_from_last_n_days(dataset_path: str, days: int, now: Optional[_dt
 def perform_update_last_n_days(
     days: int,
     query: str = "NOVIS",
+    search_mode: str = "full_text",
+    send_notifications: bool = True,
+    email_recipients: Optional[List[str]] = None,
     now: Optional[_dt.datetime] = None,
 ) -> Dict[str, Any]:
     """Perform update using a trailing *n*-day window across all datasets."""
@@ -397,14 +436,15 @@ def perform_update_last_n_days(
     for _friendly_name, path in DATASETS:
         records = fetch_items_from_last_n_days(path, days, now=reference_now)
         total_fetched += len(records)
-        matched_records.extend(filter_records_by_query(records, query=query))
+        matched_records.extend(filter_records_by_query(records, query=query, search_mode=search_mode))
 
-    email_result = send_email(matched_records)
+    email_result = send_email(matched_records, recipients=email_recipients) if send_notifications else None
     return {
         "timestamp": _dt.datetime.utcnow().isoformat() + "Z",
         "since": since,
         "to": to_timestamp,
         "query": query,
+        "search_mode": search_mode,
         "fetched": total_fetched,
         "matches": len(matched_records),
         "email_sent": email_result is not None,
@@ -416,6 +456,9 @@ def perform_update_last_n_days(
 def perform_update(
     since: str,
     query: str = "NOVIS",
+    search_mode: str = "full_text",
+    send_notifications: bool = True,
+    email_recipients: Optional[List[str]] = None,
     to_timestamp: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Perform a full update cycle: fetch, filter and send notifications.
@@ -439,14 +482,15 @@ def perform_update(
         records = fetch_changes(path, since)
         total_fetched += len(records)
         records = filter_records_by_date_range(records, from_dt=from_dt, to_dt=to_dt)
-        matched = filter_records_by_query(records, query=query)
+        matched = filter_records_by_query(records, query=query, search_mode=search_mode)
         matched_records.extend(matched)
-    email_result = send_email(matched_records)
+    email_result = send_email(matched_records, recipients=email_recipients) if send_notifications else None
     summary = {
         "timestamp": _dt.datetime.utcnow().isoformat() + "Z",
         "since": since,
         "to": to_timestamp,
         "query": query,
+        "search_mode": search_mode,
         "fetched": total_fetched,
         "matches": len(matched_records),
         "email_sent": email_result is not None,

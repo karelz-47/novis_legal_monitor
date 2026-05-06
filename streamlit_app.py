@@ -114,6 +114,16 @@ def _export_pdf(df: pd.DataFrame) -> bytes:
 
 
 search_query = st.text_input("Search text", value="", help="Case-insensitive text search across all record fields.")
+search_scope = st.radio(
+    "Search scope",
+    options=[
+        ("full_text", "A) Full text (all fields)"),
+        ("targeted", "B) proposers / corporate_body_name"),
+        ("combined", "C) Combined"),
+    ],
+    format_func=lambda item: item[1],
+    horizontal=False,
+)
 window_mode = st.radio("Time window", options=["Last N days", "Custom date range"], horizontal=True)
 
 if window_mode == "Last N days":
@@ -137,15 +147,26 @@ else:
     st.write("No previous runs recorded.")
 
 if st.button("Run update"):
-    with st.spinner("Fetching updates and sending notifications..."):
+    with st.spinner("Fetching updates..."):
         if window_mode == "Last N days":
-            summary = monitor.perform_update_last_n_days(int(trailing_days), query=search_query)
+            summary = monitor.perform_update_last_n_days(
+                int(trailing_days),
+                query=search_query,
+                search_mode=search_scope[0],
+                send_notifications=False,
+            )
         else:
             since_dt = dt.datetime.combine(date_from, dt.time.min)
             to_dt = dt.datetime.combine(date_to, dt.time.max)
             since = since_dt.isoformat() + "Z"
             to_timestamp = to_dt.isoformat() + "Z"
-            summary = monitor.perform_update(since, query=search_query, to_timestamp=to_timestamp)
+            summary = monitor.perform_update(
+                since,
+                query=search_query,
+                search_mode=search_scope[0],
+                send_notifications=False,
+                to_timestamp=to_timestamp,
+            )
 
         monitor.save_last_run_timestamp(ts_path, summary["timestamp"])
 
@@ -181,3 +202,20 @@ if st.button("Run update"):
         file_name="results.pdf",
         mime="application/pdf",
     )
+
+    st.subheader("Email Results")
+    recipient_input = st.text_input(
+        "Recipients (comma-separated emails)",
+        value="",
+        help="No email is sent automatically. Click the button below to send.",
+    )
+    recipients = [item.strip() for item in recipient_input.split(",") if item.strip()]
+    if st.button("Send via email"):
+        with st.spinner("Sending email..."):
+            email_result = monitor.send_email(records, recipients=recipients)
+        if email_result:
+            st.success("Email sent.")
+        elif not recipients:
+            st.warning("Please add at least one recipient.")
+        else:
+            st.error("Email could not be sent. Check configuration and logs.")
