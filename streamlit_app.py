@@ -89,38 +89,90 @@ def _record_sections(record: Dict[str, Any]) -> List[tuple[str, Any]]:
     ]
 
 
+def _format_date(value: Any) -> str:
+    if not value:
+        return "-"
+    text = str(value)
+    try:
+        parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.strftime("%d %B %Y")
+        return parsed.astimezone(dt.timezone.utc).strftime("%d %B %Y, %H:%M UTC")
+    except ValueError:
+        return text
+
+
+def _build_template_placeholders(records: List[Dict[str, Any]], summary: Dict[str, Any]) -> Dict[str, str]:
+    first = records[0] if records else {}
+    debtor = first.get("debtor") if isinstance(first.get("debtor"), dict) else {}
+    entity_name = debtor.get("corporate_body_name") or first.get("corporate_body_name", "-")
+    proposer = ""
+    proposers = first.get("proposers")
+    if isinstance(proposers, list) and proposers:
+        candidate = proposers[0]
+        if isinstance(candidate, dict):
+            proposer = str(candidate.get("corporate_body_name", ""))
+        else:
+            proposer = str(candidate)
+
+    finding_headline = first.get("heading") or first.get("kind") or "No finding"
+    notice_type = first.get("kind") or first.get("dataset") or "-"
+    source_extracts = []
+    for idx, rec in enumerate(records[:10], 1):
+        excerpt = rec.get("announcement") or rec.get("decision") or rec.get("advice") or rec.get("heading") or "-"
+        source_extracts.append(f"{idx}. {excerpt}")
+
+    management_summary = (
+        f"Monitoring for '{summary.get('query', '-')}' found {summary.get('matches', 0)} relevant notice(s) "
+        f"from {summary.get('fetched', 0)} reviewed records in the selected period."
+    )
+    if records:
+        management_summary += f" The latest highlighted record is '{finding_headline}' for entity '{entity_name}'."
+
+    return {
+        "{{GENERATED_AT}}": dt.datetime.utcnow().strftime("%d %B %Y, %H:%M UTC"),
+        "{{SEARCH_TARGET}}": str(summary.get("query", "-")),
+        "{{PERIOD_FROM}}": _format_date(summary.get("since")),
+        "{{PERIOD_TO}}": _format_date(summary.get("to")),
+        "{{RECORDS_REVIEWED}}": str(summary.get("fetched", 0)),
+        "{{RELEVANT_FINDINGS}}": str(summary.get("matches", 0)),
+        "{{FINDING_HEADLINE}}": str(finding_headline),
+        "{{ENTITY_NAME}}": str(entity_name),
+        "{{NOTICE_TYPE}}": str(notice_type),
+        "{{COURT_NAME}}": str(first.get("court_name", "-")),
+        "{{REFERENCE}}": str(first.get("file_reference", "-")),
+        "{{PUBLICATION_DATE}}": _format_date(first.get("released_date")),
+        "{{UPDATED_AT}}": _format_date(first.get("updated_at")),
+        "{{RELEVANT_PARTY}}": proposer or str(entity_name),
+        "{{MANAGEMENT_SUMMARY}}": management_summary,
+        "{{SOURCE_EXTRACT}}": "\n".join(source_extracts) if source_extracts else "No findings in selected period.",
+    }
+
+
+def _replace_placeholders_in_doc(doc: Document, replacements: Dict[str, str]) -> None:
+    for paragraph in doc.paragraphs:
+        for key, val in replacements.items():
+            if key in paragraph.text:
+                for run in paragraph.runs:
+                    run.text = run.text.replace(key, val)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    for key, val in replacements.items():
+                        if key in paragraph.text:
+                            for run in paragraph.runs:
+                                run.text = run.text.replace(key, val)
+
+
 def _export_word(df: pd.DataFrame, records: List[Dict[str, Any]], summary: Dict[str, Any]) -> bytes:
-    doc = Document()
-    doc.add_heading("Legal Monitor Results", level=1)
-    normal_style = doc.styles["Normal"]
-    normal_style.font.name = "Calibri"
-    normal_style.font.size = Pt(10)
-
-    doc.add_paragraph(f"Generated: {dt.datetime.utcnow().isoformat()}Z")
-    doc.add_heading("Search parameters", level=2)
-    doc.add_paragraph(f"From: {summary.get('since', '-')}")
-    doc.add_paragraph(f"To: {summary.get('to', '-')}")
-    doc.add_paragraph(f"Query: {summary.get('query', '')}")
-    doc.add_paragraph(f"Search mode: {summary.get('search_mode', '')}")
-    if "window_days" in summary:
-        doc.add_paragraph(f"Window days: {summary.get('window_days')}")
-    doc.add_paragraph(f"Fetched records: {summary.get('fetched', 0)}")
-    doc.add_paragraph(f"Matched records: {summary.get('matches', 0)}")
-
-    if df.empty:
-        doc.add_paragraph("No results found.")
-    else:
-        doc.add_heading("Matching records", level=2)
-        for idx, rec in enumerate(records, 1):
-            doc.add_heading(f"Record {idx}", level=3)
-            table = doc.add_table(rows=0, cols=2)
-            table.style = "Table Grid"
-            for label, value in _record_sections(rec):
-                if value in (None, ""):
-                    continue
-                cells = table.add_row().cells
-                cells[0].text = str(label)
-                cells[1].text = str(value)
+    template_path = os.path.join("docs", "legal_monitor_template.docx")
+    doc = Document(template_path) if os.path.exists(template_path) else Document()
+    if not os.path.exists(template_path):
+        normal_style = doc.styles["Normal"]
+        normal_style.font.name = "Calibri"
+        normal_style.font.size = Pt(10)
+    _replace_placeholders_in_doc(doc, _build_template_placeholders(records, summary))
 
     output = io.BytesIO()
     doc.save(output)
@@ -145,41 +197,46 @@ def _export_pdf(df: pd.DataFrame, records: List[Dict[str, Any]], summary: Dict[s
             y -= 12
         return y
 
+    repl = _build_template_placeholders(records, summary)
     y = height - 40
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(40, y, "Legal Monitor Results")
-    y = draw_wrapped(f"Generated: {dt.datetime.utcnow().isoformat()}Z", 40, y - 20)
-
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(40, y, "Legal Monitor Briefing")
+    y = draw_wrapped("Public registry monitoring summary for senior management", 40, y - 20)
+    y -= 8
     c.setFont("Helvetica-Bold", 10)
-    c.drawString(40, y, "Search parameters")
-    y -= 16
-    summary_lines = [
-        f"From: {summary.get('since', '-')}",
-        f"To: {summary.get('to', '-')}",
-        f"Query: {summary.get('query', '')}",
-        f"Search mode: {summary.get('search_mode', '')}",
-        f"Fetched records: {summary.get('fetched', 0)}",
-        f"Matched records: {summary.get('matches', 0)}",
+    y = draw_wrapped("Executive overview", 40, y)
+    c.setFont("Helvetica", 9)
+    overview_lines = [
+        f"Monitored entity: {repl['{{SEARCH_TARGET}}']}",
+        f"Reporting period: {repl['{{PERIOD_FROM}}']} - {repl['{{PERIOD_TO}}']}",
+        f"Report generated: {repl['{{GENERATED_AT}}']}",
+        f"Records reviewed: {repl['{{RECORDS_REVIEWED}}']}",
+        f"Relevant findings: {repl['{{RELEVANT_FINDINGS}}']}",
+        f"Key point: {repl['{{MANAGEMENT_SUMMARY}}']}",
     ]
-    if "window_days" in summary:
-        summary_lines.insert(4, f"Window days: {summary.get('window_days')}")
-    for line in summary_lines:
-        y = draw_wrapped(line, 40, y)
+    for line in overview_lines:
+        y = draw_wrapped(line, 40, y - 2)
     y -= 6
-
-    if df.empty:
-        y = draw_wrapped("No results found.", 40, y)
-    else:
-        c.setFont("Helvetica-Bold", 10)
-        c.drawString(40, y, "Matching records")
-        y -= 16
-        for idx, record in enumerate(records, 1):
-            y = draw_wrapped(f"Record {idx}", 40, y, font_name="Helvetica-Bold", font_size=10)
-            for label, value in _record_sections(record):
-                if value in (None, ""):
-                    continue
-                y = draw_wrapped(f"{label}: {value}", 50, y, font_size=8)
-            y -= 4
+    c.setFont("Helvetica-Bold", 10)
+    y = draw_wrapped("Finding details", 40, y)
+    details = [
+        ("Headline", repl["{{FINDING_HEADLINE}}"]),
+        ("Entity", repl["{{ENTITY_NAME}}"]),
+        ("Notice type", repl["{{NOTICE_TYPE}}"]),
+        ("Court", repl["{{COURT_NAME}}"]),
+        ("Reference", repl["{{REFERENCE}}"]),
+        ("Publication date", repl["{{PUBLICATION_DATE}}"]),
+        ("Latest registry update", repl["{{UPDATED_AT}}"]),
+        ("Relevant party", repl["{{RELEVANT_PARTY}}"]),
+    ]
+    c.setFont("Helvetica", 9)
+    for label, value in details:
+        y = draw_wrapped(f"{label}: {value}", 40, y - 2)
+    y -= 4
+    c.setFont("Helvetica-Bold", 10)
+    y = draw_wrapped("Source extract", 40, y)
+    c.setFont("Helvetica", 8)
+    y = draw_wrapped(repl["{{SOURCE_EXTRACT}}"], 40, y - 2)
 
     c.save()
     return output.getvalue()
