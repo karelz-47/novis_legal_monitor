@@ -113,28 +113,62 @@ def _export_pdf(df: pd.DataFrame) -> bytes:
     return output.getvalue()
 
 
-search_query = st.text_input("Search text", value="", help="Case-insensitive text search across all record fields.")
+search_query = st.text_input(
+    "What name or keyword should we look for?",
+    value="",
+    help=(
+        "Type a company name, person name, or keyword. "
+        "We look for this text without case sensitivity "
+        "(for example, 'Acme' matches 'ACME')."
+    ),
+)
 search_scope = st.radio(
-    "Search scope",
+    "Where should we look for that text?",
     options=[
-        ("full_text", "A) Full text (all fields)"),
-        ("targeted", "B) proposers / corporate_body_name"),
-        ("combined", "C) Combined"),
+        ("full_text", "Every available field"),
+        ("targeted", "Only names (proposers and corporate body name)"),
+        ("combined", "Names first, then all other fields"),
     ],
     format_func=lambda item: item[1],
     horizontal=False,
+    help=(
+        "This setting controls which data fields are checked in each API record. "
+        "'Names first, then all other fields' starts with name fields and then checks the rest."
+    ),
 )
-window_mode = st.radio("Time window", options=["Last N days", "Custom date range"], horizontal=True)
+window_mode = st.radio(
+    "How far back should we search?",
+    options=["Last N days", "Custom date range"],
+    horizontal=True,
+    help=(
+        "Choose a rolling period (for example, last 30 days) "
+        "or set exact start and end dates in UTC."
+    ),
+)
 
 if window_mode == "Last N days":
-    trailing_days = st.number_input("Days back", min_value=0, value=30, step=1)
+    trailing_days = st.number_input(
+        "Number of days to include",
+        min_value=0,
+        value=30,
+        step=1,
+        help="Example: 30 means from today back to 30 days ago (UTC).",
+    )
     date_from = None
     date_to = None
 else:
     trailing_days = None
     default_from = (dt.datetime.utcnow() - dt.timedelta(days=30)).date()
-    date_from = st.date_input("From date (UTC)", value=default_from)
-    date_to = st.date_input("To date (UTC)", value=dt.datetime.utcnow().date())
+    date_from = st.date_input(
+        "Start date (UTC)",
+        value=default_from,
+        help="Beginning of the period to check.",
+    )
+    date_to = st.date_input(
+        "End date (UTC)",
+        value=dt.datetime.utcnow().date(),
+        help="Final date to include in the search period.",
+    )
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 ts_path = os.path.join(current_dir, "last_run.txt")
