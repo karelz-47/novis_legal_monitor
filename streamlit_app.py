@@ -19,6 +19,11 @@ st.set_page_config(page_title="Legal Monitor", layout="wide")
 
 st.title("Liquidation & Bankruptcy Monitor")
 
+if "last_summary" not in st.session_state:
+    st.session_state["last_summary"] = None
+if "last_records" not in st.session_state:
+    st.session_state["last_records"] = []
+
 
 def _flatten_record(record: Dict[str, Any]) -> Dict[str, Any]:
     """Flatten nested JSON into table-friendly keys."""
@@ -204,8 +209,18 @@ if st.button("Run update"):
 
         monitor.save_last_run_timestamp(ts_path, summary["timestamp"])
 
+    st.session_state["last_summary"] = summary
+    st.session_state["last_records"] = summary.get("records", [])
     st.success("Update complete.")
-    records = summary.get("records", [])
+
+if st.button("Clear results"):
+    st.session_state["last_summary"] = None
+    st.session_state["last_records"] = []
+    st.success("Cleared previous search results.")
+
+summary = st.session_state.get("last_summary")
+records = st.session_state.get("last_records", [])
+if summary is not None:
     df = _records_to_dataframe(records)
 
     st.subheader("Run Summary")
