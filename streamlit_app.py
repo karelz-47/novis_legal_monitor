@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import io
 import os
+import re
 from typing import Any, Dict, List
 
 import pandas as pd
@@ -184,6 +185,13 @@ def _export_pdf(df: pd.DataFrame, records: List[Dict[str, Any]], summary: Dict[s
     return output.getvalue()
 
 
+def _build_export_basename(search_query: str) -> str:
+    cleaned_query = re.sub(r"[^A-Za-z0-9]", "", (search_query or ""))
+    query_part = (cleaned_query[:10] if cleaned_query else "NoQuery")
+    timestamp = dt.datetime.utcnow()
+    return f"LegalMonitor_{query_part}_{timestamp:%d%m%Y}_{timestamp:%H%M%S}"
+
+
 search_query = st.text_input(
     "What name or keyword should we look for?",
     value="",
@@ -288,6 +296,7 @@ summary = st.session_state.get("last_summary")
 records = st.session_state.get("last_records", [])
 if summary is not None:
     df = _records_to_dataframe(records)
+    export_basename = _build_export_basename(summary.get("query", ""))
 
     st.subheader("Run Summary")
     st.write({k: v for k, v in summary.items() if k != "records"})
@@ -302,19 +311,19 @@ if summary is not None:
     st.download_button(
         "Download XLSX",
         data=_export_excel(df),
-        file_name="results.xlsx",
+        file_name=f"{export_basename}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     st.download_button(
         "Download Word",
         data=_export_word(df, records, summary),
-        file_name="results.docx",
+        file_name=f"{export_basename}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
     st.download_button(
         "Download PDF",
         data=_export_pdf(df, records, summary),
-        file_name="results.pdf",
+        file_name=f"{export_basename}.pdf",
         mime="application/pdf",
     )
 
@@ -325,9 +334,45 @@ if summary is not None:
         help="No email is sent automatically. Click the button below to send.",
     )
     recipients = [item.strip() for item in recipient_input.split(",") if item.strip()]
+    attachment_options = st.multiselect(
+        "Attachments",
+        options=["xlsx", "pdf", "word"],
+        default=["xlsx"],
+        help="Choose one or more file formats to attach to the email.",
+    )
     if st.button("Send via email"):
+        attachments_payload: List[Dict[str, str | bytes]] = []
+        if "xlsx" in attachment_options:
+            attachments_payload.append(
+                {
+                    "filename": f"{export_basename}.xlsx",
+                    "content": _export_excel(df),
+                    "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                }
+            )
+        if "pdf" in attachment_options:
+            attachments_payload.append(
+                {
+                    "filename": f"{export_basename}.pdf",
+                    "content": _export_pdf(df, records, summary),
+                    "content_type": "application/pdf",
+                }
+            )
+        if "word" in attachment_options:
+            attachments_payload.append(
+                {
+                    "filename": f"{export_basename}.docx",
+                    "content": _export_word(df, records, summary),
+                    "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                }
+            )
+
         with st.spinner("Sending email..."):
-            email_result = monitor.send_email(records, recipients=recipients)
+            email_result = monitor.send_email(
+                records,
+                recipients=recipients,
+                attachments=attachments_payload,
+            )
         if email_result:
             st.success("Email sent.")
         elif not recipients:

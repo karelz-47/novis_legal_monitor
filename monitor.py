@@ -304,7 +304,11 @@ def format_records_html(records: List[Dict[str, Any]]) -> str:
     return "\n".join(html_parts)
 
 
-def send_email(records: List[Dict[str, Any]], recipients: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
+def send_email(
+    records: List[Dict[str, Any]],
+    recipients: Optional[List[str]] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
     """Send an email notification for the given records via Resend.
 
     If the `resend` SDK is not installed or the RESEND_API_KEY
@@ -345,6 +349,8 @@ def send_email(records: List[Dict[str, Any]], recipients: Optional[List[str]] = 
         "subject": subject,
         "html": html_body,
     }
+    if attachments:
+        params["attachments"] = attachments
     try:
         response = resend.Emails.send(params)  # type: ignore[attr-defined]
         logger.info("Email sent via Resend: %s", response)
