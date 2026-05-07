@@ -11,6 +11,8 @@ from typing import Any, Dict, List
 import pandas as pd
 import streamlit as st
 from docx import Document
+from docx.table import Table
+from docx.text.paragraph import Paragraph
 from docx.shared import Pt
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -181,7 +183,18 @@ def _export_word(df: pd.DataFrame, records: List[Dict[str, Any]], summary: Dict[
     return output.getvalue()
 
 
+def _iter_docx_blocks(doc: Document):
+    """Yield paragraphs and tables in document order."""
+    body = doc.element.body
+    for child in body.iterchildren():
+        if child.tag.endswith("}p"):
+            yield Paragraph(child, doc)
+        elif child.tag.endswith("}tbl"):
+            yield Table(child, doc)
+
+
 def _export_pdf(df: pd.DataFrame, records: List[Dict[str, Any]], summary: Dict[str, Any]) -> bytes:
+    """Export PDF mirroring the populated Word template structure."""
     output = io.BytesIO()
 
     base_font = "Helvetica"
@@ -195,62 +208,58 @@ def _export_pdf(df: pd.DataFrame, records: List[Dict[str, Any]], summary: Dict[s
         pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", dejavu_bold_path))
         bold_font = "DejaVuSans-Bold"
 
+    # Reuse the Word export path so both formats use exactly the same placeholder replacement.
+    doc = Document(io.BytesIO(_export_word(df, records, summary)))
+
     c = canvas.Canvas(output, pagesize=A4)
     width, height = A4
+    left_margin = 40
+    right_margin = 40
+    top_margin = 40
+    bottom_margin = 40
+    y = height - top_margin
 
-    def draw_wrapped(text: str, x: int, y: float, font_name: str = base_font, font_size: int = 9) -> float:
-        max_width = width - x - 40
-        lines = simpleSplit(text, font_name, font_size, max_width)
+    def ensure_space(min_y: float = 50) -> None:
+        nonlocal y
+        if y < min_y:
+            c.showPage()
+            y = height - top_margin
+
+    def draw_wrapped(text: str, font_name: str = base_font, font_size: int = 10, indent: int = 0, line_gap: int = 2) -> None:
+        nonlocal y
+        cleaned = text.strip()
+        if not cleaned:
+            y -= font_size + line_gap
+            ensure_space()
+            return
+        max_width = width - left_margin - right_margin - indent
+        lines = simpleSplit(cleaned, font_name, font_size, max_width)
         c.setFont(font_name, font_size)
         for line in lines:
-            if y < 50:
-                c.showPage()
-                y = height - 40
-                c.setFont(font_name, font_size)
-            c.drawString(x, y, line)
-            y -= 12
-        return y
+            ensure_space(bottom_margin + font_size)
+            c.drawString(left_margin + indent, y, line)
+            y -= font_size + line_gap
 
-    repl = _build_template_placeholders(records, summary)
-    y = height - 40
-    c.setFont(bold_font, 14)
-    c.drawString(40, y, "Legal Monitor Briefing")
-    y = draw_wrapped("Public registry monitoring summary for senior management", 40, y - 22, base_font, 10)
-
-    y -= 8
-    c.setFont(bold_font, 11)
-    y = draw_wrapped("Executive overview", 40, y, bold_font, 11)
-    c.setFont(base_font, 9)
-    for line in [
-        f"Monitored entity: {repl['{{SEARCH_TARGET}}']}",
-        f"Reporting period: {repl['{{PERIOD_FROM}}']} - {repl['{{PERIOD_TO}}']}",
-        f"Report generated: {repl['{{GENERATED_AT}}']}",
-        f"Records reviewed: {repl['{{RECORDS_REVIEWED}}']}",
-        f"Relevant findings: {repl['{{RELEVANT_FINDINGS}}']}",
-        f"Key point: {repl['{{MANAGEMENT_SUMMARY}}']}",
-    ]:
-        y = draw_wrapped(line, 40, y - 2, base_font, 9)
-
-    y -= 8
-    c.setFont(bold_font, 11)
-    y = draw_wrapped("Finding details", 40, y, bold_font, 11)
-    details = [
-        ("Headline", repl["{{FINDING_HEADLINE}}"]),
-        ("Entity", repl["{{ENTITY_NAME}}"]),
-        ("Notice type", repl["{{NOTICE_TYPE}}"]),
-        ("Court", repl["{{COURT_NAME}}"]),
-        ("Reference", repl["{{REFERENCE}}"]),
-        ("Publication date", repl["{{PUBLICATION_DATE}}"]),
-        ("Latest registry update", repl["{{UPDATED_AT}}"]),
-        ("Relevant party", repl["{{RELEVANT_PARTY}}"]),
-    ]
-    for label, value in details:
-        y = draw_wrapped(f"{label}: {value}", 40, y - 2, base_font, 9)
-
-    y -= 6
-    c.setFont(bold_font, 11)
-    y = draw_wrapped("Source extract", 40, y, bold_font, 11)
-    y = draw_wrapped(repl["{{SOURCE_EXTRACT}}"], 40, y - 2, base_font, 9)
+    for block in _iter_docx_blocks(doc):
+        if isinstance(block, Paragraph):
+            text = block.text or ""
+            if not text.strip():
+                y -= 6
+                continue
+            style = (block.style.name or "").lower() if block.style else ""
+            is_heading = "heading" in style or style in {"title", "subtitle"}
+            draw_wrapped(text, bold_font if is_heading else base_font, 12 if is_heading else 10)
+            y -= 2
+        elif isinstance(block, Table):
+            for row in block.rows:
+                cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                if not cells:
+                    continue
+                if len(cells) >= 2:
+                    draw_wrapped(f"{cells[0]}: {cells[1]}", base_font, 10)
+                else:
+                    draw_wrapped(cells[0], base_font, 10)
+            y -= 4
 
     c.save()
     return output.getvalue()
